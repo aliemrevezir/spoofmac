@@ -59,8 +59,9 @@ adımları, proxy'yi test ederken oturumun kopmaması için dikkat edilecekler. 
 - ✓ `install → status → portal → on → off → uninstall`, `app`, `doctor`, `help` (TR/EN) — Starbucks
   Wi‑Fi'ında, yan portta (18080).
 - ✓ Portal akışı gerçek Starbucks giriş sayfasında **prototiple** (`wifi-portal`, aynı mantık).
+- ✓ `install.sh` hem dosyadan hem yayındaki repodan `curl … | zsh` ile (geçici `PREFIX`).
 - ✗ spoofmac'in kendisiyle gerçek giriş sayfası, Intel Mac, macOS < 26, Türkiye dışı ağlar,
-  Discord sesli sohbet, `install.sh`'in `curl | zsh` yolu (repo yayında olmadığı için).
+  Discord sesli sohbet.
 
 ## Test yöntemi (önemli)
 
@@ -79,10 +80,10 @@ adımları, proxy'yi test ederken oturumun kopmaması için dikkat edilecekler. 
 ## Yol haritası
 
 1. Kullanıcının makinesini eski kurulumdan spoofmac'e geçir (`CLAUDE.local.md`).
-2. README'deki `curl … | zsh` kurulum yolunu yayındaki repodan doğrula.
-3. Giriş sayfasını otomatik algılama: ağ değişince (SSID/IP) captive ise `portal`, giriş bitince `on`.
-4. Homebrew tap (`brew install aliemrevezir/tap/spoofmac`).
-5. `spoofmac app --remove <App>`; başlatıcı açıkken hedef uygulama env'siz çalışıyorsa uyar.
-6. README için ekran görüntüsü / GIF (doctor çıktısı, Discord öncesi/sonrası).
-7. CI: macOS runner'da `zsh -n` + `spoofmac help`.
-8. Sesli sohbeti (UDP) test et; gerekirse `--app-mode tun` / UDP ayarlarını araştır.
+2. Giriş sayfasını otomatik algılama: ağ değişince (SSID/IP) captive ise `portal`, giriş bitince `on`.
+3. Homebrew tap (`brew install aliemrevezir/tap/spoofmac`).
+4. `spoofmac app --remove <App>`; başlatıcı açıkken hedef uygulama env'siz çalışıyorsa uyar.
+5. README için ekran görüntüsü / GIF (doctor çıktısı, Discord öncesi/sonrası).
+6. CI: macOS runner'da `zsh -n` + `spoofmac help`.
+7. Sesli sohbeti (UDP) test et; gerekirse `--app-mode tun` / UDP ayarlarını araştır.
+8. İlk sürüm etiketi (`v0.1.0`) + GitHub release notu.
