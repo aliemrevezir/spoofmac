@@ -24,7 +24,7 @@ case ":$PATH:" in
 esac
 
 if ! command -v spoofdpi >/dev/null 2>&1 && [[ ! -x /opt/homebrew/bin/spoofdpi && ! -x /usr/local/bin/spoofdpi ]]; then
-  echo "! SpoofDPI is not installed yet: brew install spoofdpi"
+  echo "! SpoofDPI is not installed yet: brew install spoofdpi  (https://github.com/xvzc/SpoofDPI)"
 fi
 
 echo "Next: spoofmac install"

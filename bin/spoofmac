@@ -1,39 +1,31 @@
 #!/bin/zsh
-# spoofmac — SpoofDPI on macOS, minus the pain.
-#
-# One command to turn SpoofDPI on and off, a public Wi-Fi (captive portal) mode,
-# launchers for apps that ignore the macOS system proxy (Discord's updater, for one)
-# and a doctor that tells you *what* is being blocked: DNS, SNI/DPI, or nothing.
-#
+# spoofmac — SpoofDPI on macOS: open Discord through it, and log in to public Wi-Fi without a fight.
 # MIT License — https://github.com/aliemrevezir/spoofmac
 
 emulate -R zsh
 set -u
 
-readonly SPOOFMAC_VERSION="0.1.0"
+readonly SPOOFMAC_VERSION="0.2.0"
 
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/spoofmac"
-CONFIG_FILE="$CONFIG_DIR/config"
+CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/spoofmac/config"
 LOG_DIR="$HOME/Library/Logs/spoofmac"
 LABEL="local.spoofmac.spoofdpi"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 DOMAIN="gui/$(id -u)"
 PROBE_URL="http://captive.apple.com/hotspot-detect.html"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+LAUNCHER_ID="local.spoofmac.discord"
 
-# ---- Defaults — override any of these in $CONFIG_FILE, then run `spoofmac install` ----
+# ---- Defaults (optional overrides in $CONFIG_FILE; run `spoofmac install` after changing) ----
 SPOOFDPI_BIN=""
 LISTEN_HOST="127.0.0.1"
 LISTEN_PORT="8080"
-# SpoofDPI resolves hostnames itself. Plain UDP 53 is blocked or hijacked on many
-# networks, so it asks a DoH server by IP (no bootstrap lookup needed).
+# SpoofDPI resolves names itself; plain UDP 53 is blocked or hijacked on many networks.
 DOH_URL="https://1.1.1.1/dns-query"
-# SpoofDPI's default ("sni") was reset by the DPI on the networks we tested;
-# 5-byte chunks got through. "random" worked as well.
+# SpoofDPI's default ("sni") was reset by the DPI where we tested; 5-byte chunks got through.
 SPLIT_MODE="chunk"
 CHUNK_SIZE="5"
 EXTRA_ARGS=()
-TEST_URL="https://discord.com/api/v9/gateway"
 
 [[ -r "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
 PROXY_URL="http://$LISTEN_HOST:$LISTEN_PORT"
@@ -46,13 +38,12 @@ detect_lang() {
 }
 TR=$(detect_lang)
 
-t()    { if (( TR )); then print -r -- "$2"; else print -r -- "$1"; fi }
-say()  { t "$@" }
-warn() { t "$@" >&2 }
-die()  { warn "$@"; exit 1 }
-row()  { printf '%-22s %s\n' "$1" "$2" }
+t()   { if (( TR )); then print -r -- "$2"; else print -r -- "$1"; fi }
+say() { t "$@" }
+die() { t "$@" >&2; exit 1 }
+row() { printf '%-20s %s\n' "$1" "$2" }
 
-# ---- SpoofDPI binary ----
+# ---- SpoofDPI ----
 find_spoofdpi() {
   local c
   for c in "$SPOOFDPI_BIN" "${commands[spoofdpi]:-}" /opt/homebrew/bin/spoofdpi /usr/local/bin/spoofdpi; do
@@ -61,17 +52,16 @@ find_spoofdpi() {
   return 1
 }
 
-# "spoofdpi 1.5.3 f31018f (homebrew)" -> 1.5.3. Pre-1.0 builds have no --version and print nothing.
+# "spoofdpi 1.5.3 f31018f (homebrew)" -> 1.5.3. Pre-1.0 builds have no --version.
 spoofdpi_version() { "$1" --version 2>/dev/null | awk 'NR == 1 && $1 == "spoofdpi" {print $2}' }
 
-# ---- Network services & system proxy ----
+# ---- System proxy (set on every enabled service, so Wi-Fi <-> Ethernet <-> iPhone keeps working) ----
 network_services() { networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | grep -v '^\*' }
 
 wifi_device() {
   networksetup -listallhardwareports 2>/dev/null | awk '/^Hardware Port: (Wi-Fi|AirPort)$/ {getline; print $2; exit}'
 }
 
-# True when the service's HTTPS proxy is on and points at our SpoofDPI.
 proxy_is_ours() {
   local out=$'\n'"$(networksetup -getsecurewebproxy "$1" 2>/dev/null)"$'\n'
   [[ "$out" == *$'\n'"Enabled: Yes"$'\n'* &&
@@ -79,7 +69,6 @@ proxy_is_ours() {
      "$out" == *$'\n'"Port: $LISTEN_PORT"$'\n'* ]]
 }
 
-# Every enabled service gets the proxy, so switching Wi-Fi <-> Ethernet <-> iPhone keeps working.
 proxy_on() {
   local s
   for s in "${(@f)$(network_services)}"; do
@@ -98,7 +87,7 @@ proxy_off() {
   done
 }
 
-# ---- LaunchAgent ----
+# ---- Background service (LaunchAgent) ----
 agent_loaded() { launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 }
 port_open()    { nc -z "$LISTEN_HOST" "$LISTEN_PORT" >/dev/null 2>&1 }
 port_owner()   { lsof -nP -iTCP:"$LISTEN_PORT" -sTCP:LISTEN 2>/dev/null | awk 'NR == 2 {print $1 " (pid " $2 ")"}' }
@@ -163,14 +152,13 @@ internet_state() {
 code_via_proxy() { curl -s -m "${2:-10}" -x "$PROXY_URL" -o /dev/null -w '%{http_code}' "$1" 2>/dev/null }
 code_ok()        { [[ "$1" == [23]?? ]] }
 proxy_alive()    { code_ok "$(code_via_proxy https://www.google.com 8)" }
-url_host()       { local h=${1#*://}; print -r -- "${h%%[/:?]*}" }
 
 # ---- Commands ----
 cmd_install() {
   local bin ver
   bin=$(find_spoofdpi) || die \
-    "SpoofDPI not found. Install it first: brew install spoofdpi" \
-    "SpoofDPI bulunamadı. Önce kur: brew install spoofdpi"
+    "SpoofDPI not found. Install it first: brew install spoofdpi  (https://github.com/xvzc/SpoofDPI)" \
+    "SpoofDPI bulunamadı. Önce kur: brew install spoofdpi  (https://github.com/xvzc/SpoofDPI)"
   ver=$(spoofdpi_version "$bin")
   [[ "${ver%%.*}" == <1-> ]] || die \
     "spoofmac needs SpoofDPI 1.x (found ${ver:-a pre-1.0 build} at $bin). Update: brew upgrade spoofdpi" \
@@ -178,52 +166,37 @@ cmd_install() {
 
   # Something else on our port (brew services, an older setup) would silently take our traffic.
   if port_open && ! agent_loaded; then
-    die "Port $LISTEN_PORT is already taken by $(port_owner). Stop it first (e.g. brew services stop spoofdpi) or set LISTEN_PORT in $CONFIG_FILE." \
-        "$LISTEN_PORT portunu zaten $(port_owner) kullanıyor. Önce onu durdur (ör. brew services stop spoofdpi) ya da $CONFIG_FILE içinde LISTEN_PORT'u değiştir."
-  fi
-
-  if [[ ! -f "$CONFIG_FILE" ]]; then
-    mkdir -p "$CONFIG_DIR"
-    cat > "$CONFIG_FILE" <<EOF
-# spoofmac config (zsh). Uncomment to change a default, then run: spoofmac install
-SPOOFDPI_BIN="$bin"
-# LISTEN_PORT="8080"
-# DOH_URL="https://1.1.1.1/dns-query"
-# SPLIT_MODE="chunk"          # chunk | random | sni | none
-# CHUNK_SIZE="5"              # try 1 if 5 stops working
-# EXTRA_ARGS=(--https-disorder)
-# TEST_URL="https://discord.com/api/v9/gateway"
-EOF
+    die "Port $LISTEN_PORT is already taken by $(port_owner). Stop it first (e.g. brew services stop spoofdpi)." \
+        "$LISTEN_PORT portunu zaten $(port_owner) kullanıyor. Önce onu durdur (ör. brew services stop spoofdpi)."
   fi
 
   agent_stop                  # so a rewritten plist is picked up
   write_plist "$bin"
-  say "SpoofDPI $ver · LaunchAgent: $PLIST" "SpoofDPI $ver · LaunchAgent: $PLIST"
   cmd_on
+  say "Next: spoofmac discord" "Sıradaki: spoofmac discord"
 }
 
 cmd_on() {
   [[ -f "$PLIST" ]] || die "Not installed yet. Run: spoofmac install" "Henüz kurulmadı. Çalıştır: spoofmac install"
   local state; state=$(internet_state)
-  if [[ "$state" == captive && "${1:-}" != --force ]]; then
-    die "This network wants you to log in first (captive portal). Run: spoofmac portal" \
-        "Bu ağ önce giriş yapmanı istiyor (captive portal). Çalıştır: spoofmac portal"
+  if [[ "$state" == captive ]]; then
+    die "This network wants you to log in first. Run: spoofmac portal" \
+        "Bu ağ önce giriş yapmanı istiyor. Çalıştır: spoofmac portal"
   fi
-  agent_start || die "SpoofDPI did not start. Log: $LOG_DIR/spoofdpi.log" "SpoofDPI başlamadı. Log: $LOG_DIR/spoofdpi.log"
+  agent_start || die "SpoofDPI did not start. See: spoofmac logs" "SpoofDPI başlamadı. Bak: spoofmac logs"
   proxy_on
   dscacheutil -flushcache 2>/dev/null
 
   if proxy_alive; then
-    say "✓ SpoofDPI is on — system proxy $PROXY_URL" "✓ SpoofDPI açık — sistem proxy'si $PROXY_URL"
+    say "✓ SpoofDPI is on" "✓ SpoofDPI açık"
   elif [[ "$state" == offline ]]; then
-    say "✓ SpoofDPI is on. You're offline right now; it will work once the network is back." \
-        "✓ SpoofDPI açık. Şu an internet yok; ağ gelince çalışır."
+    say "✓ SpoofDPI is on (you're offline right now)" "✓ SpoofDPI açık (şu an internet yok)"
   else
     # Online, but not through SpoofDPI: a proxy that goes nowhere means no internet at all.
     proxy_off
     agent_stop
-    die "SpoofDPI started but can't reach the internet on this network, so it was switched off again. See: spoofmac doctor" \
-        "SpoofDPI başladı ama bu ağda internete çıkamıyor, o yüzden tekrar kapatıldı. Bak: spoofmac doctor"
+    die "SpoofDPI can't reach the internet on this network, so it was switched off again. See: spoofmac doctor" \
+        "SpoofDPI bu ağda internete çıkamıyor, o yüzden tekrar kapatıldı. Bak: spoofmac doctor"
   fi
 }
 
@@ -231,116 +204,121 @@ cmd_off() {
   proxy_off                   # proxy first, so nothing is left pointing at a dead port
   agent_stop
   dscacheutil -flushcache 2>/dev/null
-  say "✓ SpoofDPI is off — direct connection" "✓ SpoofDPI kapalı — doğrudan bağlantı"
+  say "✓ SpoofDPI is off" "✓ SpoofDPI kapalı"
 }
 
 cmd_portal() {
   cmd_off >/dev/null
-  say "SpoofDPI paused for the Wi-Fi login." "Wi-Fi girişi için SpoofDPI durduruldu."
-
   if [[ -n "${1:-}" ]]; then
     local dev i; dev=$(wifi_device)
     [[ -n "$dev" ]] || die "No Wi-Fi interface found." "Wi-Fi arayüzü bulunamadı."
     say "Joining \"$1\"..." "\"$1\" ağına bağlanılıyor..."
-    networksetup -setairportnetwork "$dev" "$1" ${2:+"$2"} || die "Could not join \"$1\"." "\"$1\" ağına bağlanılamadı."
+    networksetup -setairportnetwork "$dev" "$1" || die "Could not join \"$1\"." "\"$1\" ağına bağlanılamadı."
     for i in {1..20}; do [[ -n "$(ipconfig getifaddr "$dev" 2>/dev/null)" ]] && break; sleep 1; done
     sleep 2                   # DHCP done; give the portal a moment to start intercepting
   fi
 
   case "$(internet_state)" in
     online)
-      say "No login page — you're already online. Turn SpoofDPI back on: spoofmac on" \
-          "Giriş sayfası yok, internet zaten açık. SpoofDPI'ı geri açmak için: spoofmac on" ;;
-    captive)
+      say "No login page here, you're already online. Run: spoofmac on" \
+          "Burada giriş sayfası yok, internet zaten açık. Çalıştır: spoofmac on" ;;
+    *)
       open "http://captive.apple.com"   # plain HTTP, so the portal can intercept and redirect it
-      say "Login page opened in your browser. When you're done: spoofmac on" \
-          "Giriş sayfası tarayıcıda açıldı. Girişi bitirince: spoofmac on" ;;
-    offline)
-      say "No internet yet. If no login page shows up, open http://captive.apple.com yourself. Then: spoofmac on" \
-          "Henüz internet yok. Giriş sayfası çıkmazsa http://captive.apple.com adresini elle aç. Sonra: spoofmac on" ;;
+      say "SpoofDPI paused. Log in on the page that just opened, then run: spoofmac on" \
+          "SpoofDPI durduruldu. Açılan sayfada giriş yap, sonra çalıştır: spoofmac on" ;;
   esac
 }
 
-cmd_status() {
-  local bin ver="?" s any=0 code
-  bin=$(find_spoofdpi) && ver=$(spoofdpi_version "$bin")
-  print -r -- "spoofmac $SPOOFMAC_VERSION · SpoofDPI ${ver:-?}"
-
-  if port_open && agent_loaded; then
-    row "SpoofDPI" "$(t "running on $LISTEN_HOST:$LISTEN_PORT" "çalışıyor, $LISTEN_HOST:$LISTEN_PORT")"
-  elif port_open; then
-    row "SpoofDPI" "$(t "port $LISTEN_PORT is used by $(port_owner), not spoofmac" "$LISTEN_PORT portunu spoofmac değil $(port_owner) kullanıyor")"
-  else
-    row "SpoofDPI" "$(t stopped durdu)"
-  fi
-
-  for s in "${(@f)$(network_services)}"; do
-    proxy_is_ours "$s" && { row "$(t "System proxy" "Sistem proxy'si")" "$s → $PROXY_URL"; any=1 }
+# Discord's window follows the system proxy, but its updater doesn't: it connects directly and
+# never gets past "Checking for updates…". It does read HTTPS_PROXY, so we start Discord with it.
+cmd_discord() {
+  local src="" c dest info icon_file icon
+  for c in "/Applications/Discord.app" "$HOME/Applications/Discord.app"; do
+    [[ -d "$c" ]] && { src=$c; break }
   done
-  (( any )) || row "$(t "System proxy" "Sistem proxy'si")" "$(t off kapalı)"
+  [[ -n "$src" ]] || die "Discord is not installed: https://discord.com/download" "Discord kurulu değil: https://discord.com/download"
+  port_open || die "SpoofDPI isn't running. Run: spoofmac install" "SpoofDPI çalışmıyor. Çalıştır: spoofmac install"
 
-  case "$(internet_state)" in
-    online)  row "$(t Internet İnternet)" "$(t online açık)" ;;
-    captive) row "$(t Internet İnternet)" "$(t "login page waiting → spoofmac portal" "giriş sayfası bekliyor → spoofmac portal")" ;;
-    offline) row "$(t Internet İnternet)" "$(t offline yok)" ;;
-  esac
+  local apps_dir="${SPOOFMAC_APPS_DIR:-/Applications}"
+  [[ -w "$apps_dir" ]] || apps_dir="$HOME/Applications"
+  mkdir -p "$apps_dir"
+  dest="$apps_dir/Discord SpoofDPI.app"
 
-  if port_open; then
-    code=$(code_via_proxy "$TEST_URL")
-    if code_ok "$code"; then row "$(t Test Test)" "✓ $(url_host "$TEST_URL") → $code"
-    else row "$(t Test Test)" "✗ $(url_host "$TEST_URL") → ${code:-000} ($(t "run: spoofmac doctor" "çalıştır: spoofmac doctor"))"
+  if [[ "$(plutil -extract CFBundleIdentifier raw "$dest/Contents/Info.plist" 2>/dev/null)" != "$LAUNCHER_ID" ]]; then
+    # Never write onto an existing bundle: it would nest inside it and break the signature.
+    [[ -e "$dest" ]] && { mv "$dest" "$HOME/.Trash/Discord SpoofDPI $(date +%Y%m%d-%H%M%S).app" ||
+      die "Could not move the old $dest to the Trash." "Eski $dest Çöp Sepeti'ne taşınamadı." }
+
+    local envs="--env HTTPS_PROXY=$PROXY_URL --env HTTP_PROXY=$PROXY_URL --env NO_PROXY=localhost,127.0.0.1,::1"
+    osacompile -o "$dest" -e "do shell script \"open -a \" & quoted form of \"$src\" & \" $envs\"" 2>/dev/null ||
+      die "osacompile failed." "osacompile başarısız oldu."
+
+    info="$dest/Contents/Info.plist"
+    plutil -replace CFBundleIdentifier -string "$LAUNCHER_ID" "$info"   # without it, launchers stay invisible to search
+    icon_file=$(plutil -extract CFBundleIconFile raw "$src/Contents/Info.plist" 2>/dev/null)
+    icon="$src/Contents/Resources/${icon_file%.icns}.icns"
+    if [[ -n "$icon_file" && -f "$icon" ]]; then
+      cp "$icon" "$dest/Contents/Resources/applet.icns"
+      plutil -remove CFBundleIconName "$info" 2>/dev/null         # else Assets.car's icon wins
+      rm -f "$dest/Contents/Resources/Assets.car"
     fi
+    codesign --force --deep -s - "$dest" >/dev/null 2>&1 && codesign --verify "$dest" 2>/dev/null ||
+      die "Could not sign $dest" "$dest imzalanamadı"
+    touch "$dest"
+    [[ -x "$LSREGISTER" ]] && "$LSREGISTER" -f "$dest" 2>/dev/null
+    mdimport "$dest" 2>/dev/null
   fi
-}
 
-doh_ips() {
-  curl -s --noproxy '*' -m 6 -H 'accept: application/dns-json' "https://1.1.1.1/dns-query?name=$1&type=A" 2>/dev/null |
-    grep -oE '"data":"[0-9.]+"' | cut -d'"' -f4
+  [[ -n "${SPOOFMAC_NO_OPEN:-}" ]] && { print -r -- "$dest"; return 0 }
+
+  # An already running Discord keeps its old environment, so restart it.
+  if pgrep -xq Discord; then
+    osascript -e 'quit app "Discord"' 2>/dev/null
+    local i; for i in {1..10}; do pgrep -xq Discord || break; sleep 1; done
+  fi
+  open "$dest"
+  say "✓ Discord is opening through SpoofDPI.
+  From now on, open \"Discord SpoofDPI\" (Applications) instead of Discord, or run: spoofmac discord" \
+      "✓ Discord SpoofDPI üzerinden açılıyor.
+  Bundan sonra Discord yerine \"Discord SpoofDPI\"yı aç (Uygulamalar), ya da çalıştır: spoofmac discord"
 }
-system_ip()  { dscacheutil -q host -a name "$1" 2>/dev/null | awk '/^ip_address/ {print $2; exit}' }
-udp53_ip()   { dig +short +time=2 +tries=1 @1.1.1.1 "$1" A 2>/dev/null | grep -E '^[0-9.]+$' | head -1 }
 
 cmd_doctor() {
-  local host="${1:-$(url_host "$TEST_URL")}" state sys udp code rc
+  local host="${1:-discord.com}" s any=0 sys udp rc code
   local -a doh
   print -r -- "spoofmac doctor · $host"
   print
 
-  state=$(internet_state)
-  row "$(t Internet İnternet)" "$state"
-  [[ "$state" == captive ]] && say "→ Log in first: spoofmac portal" "→ Önce giriş yap: spoofmac portal"
+  if port_open && agent_loaded; then row "SpoofDPI" "$(t "running on $LISTEN_HOST:$LISTEN_PORT" "çalışıyor, $LISTEN_HOST:$LISTEN_PORT")"
+  elif port_open;               then row "SpoofDPI" "$(t "port $LISTEN_PORT is used by $(port_owner)" "$LISTEN_PORT portunu $(port_owner) kullanıyor")"
+  else                               row "SpoofDPI" "$(t stopped durdu)"
+  fi
+  for s in "${(@f)$(network_services)}"; do proxy_is_ours "$s" && any=1; done
+  row "$(t "System proxy" "Sistem proxy'si")" "$( (( any )) && print "$PROXY_URL" || t off kapalı)"
+  row "$(t Internet İnternet)" "$(internet_state)"
 
-  doh=( ${(f)"$(doh_ips "$host")"} )
-  sys=$(system_ip "$host")
-  udp=$(udp53_ip "$host")
+  doh=( ${(f)"$(curl -s --noproxy '*' -m 6 -H 'accept: application/dns-json' \
+          "https://1.1.1.1/dns-query?name=$host&type=A" 2>/dev/null | grep -oE '"data":"[0-9.]+"' | cut -d'"' -f4)"} )
+  sys=$(dscacheutil -q host -a name "$host" 2>/dev/null | awk '/^ip_address/ {print $2; exit}')
+  udp=$(dig +short +time=2 +tries=1 @1.1.1.1 "$host" A 2>/dev/null | grep -E '^[0-9.]+$' | head -1)
 
   local dns_bad=0
-  row "DoH (1.1.1.1)" "${doh[*]:-$(t "no answer" "yanıt yok")}"
   if [[ -n "$sys" && ${#doh} -gt 0 && ${doh[(Ie)$sys]} -eq 0 ]]; then
     dns_bad=1
-    row "$(t "System DNS" "Sistem DNS'i")" "✗ $sys — $(t "differs from DoH: DNS is tampered with" "DoH'tan farklı: DNS'e müdahale var")"
+    row "$(t "System DNS" "Sistem DNS'i")" "✗ $sys ($(t "real: ${doh[1]}" "gerçeği: ${doh[1]}"))"
   else
     row "$(t "System DNS" "Sistem DNS'i")" "${sys:-$(t "no answer" "yanıt yok")}"
   fi
-  if [[ -z "$udp" ]]; then
-    row "$(t "Plain DNS (UDP 53)" "Düz DNS (UDP 53)")" "$(t "blocked" "kapalı")"
-  elif (( ${#doh} )) && (( ${doh[(Ie)$udp]} == 0 )); then
-    row "$(t "Plain DNS (UDP 53)" "Düz DNS (UDP 53)")" "✗ $udp — $(t "hijacked" "yolda değiştiriliyor")"
-  else
-    row "$(t "Plain DNS (UDP 53)" "Düz DNS (UDP 53)")" "$udp"
-  fi
+  row "UDP 53" "${udp:-$(t blocked kapalı)}"
 
-  # Direct HTTPS to the *real* IP: DNS is out of the picture, only DPI/SNI filtering is left.
+  # Direct HTTPS to the real IP: DNS is out of the picture, only DPI/SNI filtering is left.
   local dpi_bad=0
   if (( ${#doh} )); then
     curl -s --noproxy '*' -m 8 -o /dev/null --resolve "$host:443:${doh[1]}" "https://$host/" 2>/dev/null
     rc=$?
-    case $rc in
-      0)        row "$(t "Direct HTTPS" "Doğrudan HTTPS")" "✓ $(t ok açık)" ;;
-      35|52|56) dpi_bad=1; row "$(t "Direct HTTPS" "Doğrudan HTTPS")" "✗ $(t "reset during TLS — SNI/DPI filtering" "TLS sırasında koparıldı — SNI/DPI filtresi")" ;;
-      28)       dpi_bad=1; row "$(t "Direct HTTPS" "Doğrudan HTTPS")" "✗ $(t "timed out — IP block or DPI" "zaman aşımı — IP engeli ya da DPI")" ;;
-      *)        dpi_bad=1; row "$(t "Direct HTTPS" "Doğrudan HTTPS")" "✗ curl exit $rc" ;;
-    esac
+    if (( rc == 0 )); then row "$(t "Direct HTTPS" "Doğrudan HTTPS")" "✓"
+    else dpi_bad=1; row "$(t "Direct HTTPS" "Doğrudan HTTPS")" "✗ $(t "blocked (DPI)" "engelli (DPI)") · curl $rc"
+    fi
   fi
 
   local spoof_ok=0
@@ -348,92 +326,18 @@ cmd_doctor() {
     code=$(code_via_proxy "https://$host/")
     code_ok "$code" && spoof_ok=1
     row "$(t "Via SpoofDPI" "SpoofDPI üstünden")" "$( (( spoof_ok )) && print "✓ $code" || print "✗ ${code:-000}")"
-  else
-    row "$(t "Via SpoofDPI" "SpoofDPI üstünden")" "$(t "not running (spoofmac on)" "çalışmıyor (spoofmac on)")"
   fi
 
   print
   if (( ! dns_bad && ! dpi_bad )); then
-    say "Verdict: nothing blocks $host on this network." "Sonuç: bu ağda $host için engel yok."
-  elif (( dns_bad && ! dpi_bad )); then
-    say "Verdict: only DNS is blocked. SpoofDPI fixes it (so would any DoH resolver)." \
-        "Sonuç: yalnız DNS engelli. SpoofDPI çözer (herhangi bir DoH çözücü de çözerdi)."
+    say "Nothing blocks $host here." "Burada $host için engel yok."
+  elif port_open && (( spoof_ok )); then
+    say "$host is blocked here, and SpoofDPI gets through." "$host burada engelli, SpoofDPI geçiyor."
+  elif port_open; then
+    say "SpoofDPI doesn't get through. Try CHUNK_SIZE=\"1\" or SPLIT_MODE=\"random\" in $CONFIG_FILE, then: spoofmac install" \
+        "SpoofDPI geçemiyor. $CONFIG_FILE içine CHUNK_SIZE=\"1\" ya da SPLIT_MODE=\"random\" yaz, sonra: spoofmac install"
   else
-    say "Verdict: SNI/DPI filtering$( (( dns_bad )) && print " + DNS tampering"). SpoofDPI is needed, and apps that ignore the system proxy need a launcher: spoofmac app <App>" \
-        "Sonuç: SNI/DPI filtresi$( (( dns_bad )) && print " + DNS müdahalesi"). SpoofDPI şart; sistem proxy'sini kullanmayan uygulamalar için başlatıcı gerekir: spoofmac app <Uygulama>"
-  fi
-  if port_open && (( ! spoof_ok )); then
-    say "SpoofDPI didn't get through either. Try SPLIT_MODE=\"random\" or CHUNK_SIZE=\"1\" in $CONFIG_FILE, then: spoofmac install" \
-        "SpoofDPI de geçemedi. $CONFIG_FILE içinde SPLIT_MODE=\"random\" ya da CHUNK_SIZE=\"1\" dene, sonra: spoofmac install"
-  fi
-}
-
-# A tiny app that starts <App> with HTTPS_PROXY set. Some apps ship their own HTTP client
-# that ignores the macOS system proxy but honours these variables (Discord's updater does).
-cmd_app() {
-  local target="${1:-}" src="" c name dest info icon_file icon
-  [[ -n "$target" ]] || die "Usage: spoofmac app <App name or path>" "Kullanım: spoofmac app <Uygulama adı ya da yolu>"
-
-  if [[ -d "$target" ]]; then
-    src=${target:A}
-  else
-    for c in "/Applications/$target.app" "$HOME/Applications/$target.app" "/System/Applications/$target.app"; do
-      [[ -d "$c" ]] && { src=$c; break }
-    done
-    [[ -n "$src" ]] || src=$(mdfind "kMDItemContentType == 'com.apple.application-bundle' && kMDItemFSName == '$target.app'" 2>/dev/null | head -1)
-  fi
-  [[ -n "$src" && -d "$src" ]] || die "App not found: $target" "Uygulama bulunamadı: $target"
-
-  name="${${src:t}%.app} SpoofDPI"
-  local apps_dir="${SPOOFMAC_APPS_DIR:-/Applications}"
-  [[ -w "$apps_dir" ]] || apps_dir="$HOME/Applications"
-  mkdir -p "$apps_dir"
-  dest="$apps_dir/$name.app"
-
-  # Never write onto an existing bundle: mv/cp would nest the new one inside it and
-  # break the code signature. Move the old one to the Trash instead.
-  if [[ -e "$dest" ]]; then
-    mv "$dest" "$HOME/.Trash/$name $(date +%Y%m%d-%H%M%S).app" ||
-      die "Could not move the old $dest to the Trash." "Eski $dest Çöp Sepeti'ne taşınamadı."
-  fi
-
-  local envs="--env HTTPS_PROXY=$PROXY_URL --env HTTP_PROXY=$PROXY_URL --env NO_PROXY=localhost,127.0.0.1,::1"
-  osacompile -o "$dest" -e "do shell script \"open -a \" & quoted form of \"$src\" & \" $envs\"" 2>/dev/null ||
-    die "osacompile failed." "osacompile başarısız oldu."
-
-  info="$dest/Contents/Info.plist"
-  # Launchers without a bundle id are invisible to Raycast/Alfred.
-  plutil -replace CFBundleIdentifier -string "local.spoofmac.launcher.${${(L)name}//[^a-z0-9]/-}" "$info"
-
-  # Borrow the real app's icon. osacompile's Assets.car wins over applet.icns, so drop it.
-  icon_file=$(plutil -extract CFBundleIconFile raw "$src/Contents/Info.plist" 2>/dev/null)
-  icon="$src/Contents/Resources/${icon_file%.icns}.icns"
-  if [[ -n "$icon_file" && -f "$icon" ]]; then
-    cp "$icon" "$dest/Contents/Resources/applet.icns"
-    plutil -remove CFBundleIconName "$info" 2>/dev/null
-    rm -f "$dest/Contents/Resources/Assets.car"
-  fi
-
-  codesign --force --deep -s - "$dest" >/dev/null 2>&1 && codesign --verify "$dest" 2>/dev/null ||
-    die "Could not sign $dest" "$dest imzalanamadı"
-  touch "$dest"
-  [[ -x "$LSREGISTER" ]] && "$LSREGISTER" -f "$dest" 2>/dev/null
-  mdimport "$dest" 2>/dev/null
-
-  say "✓ Created $dest
-  Open ${src:t:r} with this from now on (Dock, Spotlight, Raycast). If ${src:t:r} is already
-  running, quit it first (⌘Q) — an app that's already open keeps its old environment." \
-      "✓ Oluşturuldu: $dest
-  ${src:t:r} uygulamasını bundan sonra bununla aç (Dock, Spotlight, Raycast). ${src:t:r} zaten
-  açıksa önce kapat (⌘Q) — açık bir uygulama eski ortamıyla devam eder."
-}
-
-cmd_shellenv() {
-  if [[ "${1:-}" == --unset ]]; then
-    print -r -- "unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NO_PROXY no_proxy"
-  else
-    print -r -- "export HTTP_PROXY=$PROXY_URL HTTPS_PROXY=$PROXY_URL http_proxy=$PROXY_URL https_proxy=$PROXY_URL"
-    print -r -- "export NO_PROXY=localhost,127.0.0.1,::1,.local no_proxy=localhost,127.0.0.1,::1,.local"
+    say "$host is blocked here. Turn SpoofDPI on: spoofmac on" "$host burada engelli. SpoofDPI'ı aç: spoofmac on"
   fi
 }
 
@@ -445,48 +349,40 @@ cmd_logs() {
 cmd_uninstall() {
   cmd_off >/dev/null
   [[ -f "$PLIST" ]] && rm -f "$PLIST"
-  say "✓ SpoofDPI stopped and its LaunchAgent removed. Kept: $CONFIG_DIR, launchers (*SpoofDPI.app), the spoofmac command." \
-      "✓ SpoofDPI durduruldu, LaunchAgent'ı silindi. Duruyor: $CONFIG_DIR, başlatıcılar (*SpoofDPI.app), spoofmac komutu."
+  say "✓ Removed. You can delete \"Discord SpoofDPI\" from Applications." \
+      "✓ Kaldırıldı. \"Discord SpoofDPI\"yı Uygulamalar'dan silebilirsin."
 }
 
 usage() {
-  say "spoofmac $SPOOFMAC_VERSION — SpoofDPI on macOS, minus the pain
+  say "spoofmac $SPOOFMAC_VERSION
 
-  spoofmac install          set up SpoofDPI to run in the background and turn it on
-  spoofmac on | off         turn SpoofDPI + the system proxy on / off
-  spoofmac portal [WIFI]    public Wi-Fi: pause SpoofDPI, (join WIFI,) open the login page
-  spoofmac status           what's running, where the proxy points, are we online
-  spoofmac doctor [HOST]    what blocks HOST here: DNS, SNI/DPI, or nothing
-  spoofmac app <APP>        make \"<APP> SpoofDPI.app\" for apps that ignore the system proxy
-  spoofmac shellenv         proxy variables for your shell: eval \"\$(spoofmac shellenv)\"
-  spoofmac logs             follow the SpoofDPI log
-  spoofmac uninstall        stop and remove the background service
+  spoofmac install          start SpoofDPI (and at every login)
+  spoofmac discord          open Discord through SpoofDPI
+  spoofmac portal [WIFI]    public Wi-Fi: pause SpoofDPI and open the login page
+  spoofmac on | off         turn SpoofDPI on / off
 
-Internet gone? Run: spoofmac off" \
-      "spoofmac $SPOOFMAC_VERSION — macOS'ta SpoofDPI, derdi olmadan
+  spoofmac doctor [HOST]    what blocks HOST here (default: discord.com)
+  spoofmac logs             follow SpoofDPI's log
+  spoofmac uninstall        remove everything" \
+      "spoofmac $SPOOFMAC_VERSION
 
-  spoofmac install          SpoofDPI'ı arka planda çalışacak şekilde kur ve aç
-  spoofmac on | off         SpoofDPI + sistem proxy'sini aç / kapat
-  spoofmac portal [WIFI]    halka açık Wi-Fi: SpoofDPI'ı durdur, (WIFI'ye bağlan,) giriş sayfasını aç
-  spoofmac status           ne çalışıyor, proxy nereyi gösteriyor, internet var mı
-  spoofmac doctor [ADRES]   bu ağda ADRES'i ne engelliyor: DNS, SNI/DPI ya da hiçbir şey
-  spoofmac app <UYGULAMA>   sistem proxy'sini kullanmayan uygulamalar için \"<UYGULAMA> SpoofDPI.app\"
-  spoofmac shellenv         terminal için proxy değişkenleri: eval \"\$(spoofmac shellenv)\"
+  spoofmac install          SpoofDPI'ı başlat (her oturum açılışında da)
+  spoofmac discord          Discord'u SpoofDPI üzerinden aç
+  spoofmac portal [WIFI]    giriş sayfalı Wi-Fi: SpoofDPI'ı durdur, giriş sayfasını aç
+  spoofmac on | off         SpoofDPI'ı aç / kapat
+
+  spoofmac doctor [ADRES]   burada ADRES'i ne engelliyor (varsayılan: discord.com)
   spoofmac logs             SpoofDPI logunu izle
-  spoofmac uninstall        arka plan servisini durdur ve kaldır
-
-İnternet gitti mi? Çalıştır: spoofmac off"
+  spoofmac uninstall        her şeyi kaldır"
 }
 
 case "${1:-help}" in
   install)              cmd_install ;;
-  on|resume)            shift; cmd_on "$@" ;;
-  off)                  cmd_off ;;
+  discord)              cmd_discord ;;
   portal)               shift; cmd_portal "$@" ;;
-  status)               cmd_status ;;
+  on)                   cmd_on ;;
+  off)                  cmd_off ;;
   doctor)               shift; cmd_doctor "$@" ;;
-  app)                  shift; cmd_app "$@" ;;
-  shellenv)             shift; cmd_shellenv "$@" ;;
   logs)                 cmd_logs ;;
   uninstall)            cmd_uninstall ;;
   version|-v|--version) print -r -- "spoofmac $SPOOFMAC_VERSION" ;;
