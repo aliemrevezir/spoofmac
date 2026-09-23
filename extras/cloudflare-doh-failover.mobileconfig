@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Optional system-wide DNS-over-HTTPS (Cloudflare) for macOS 26+.
+  AllowFailover: when the DoH server can't be reached (e.g. a public Wi-Fi before you log in),
+  macOS falls back to the network's own DNS, so login pages keep working.
+  Not needed for spoofmac itself: SpoofDPI resolves names on its own.
+-->
+<plist version="1.0">
+<dict>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key><string>com.apple.dnsSettings.managed</string>
+      <key>PayloadIdentifier</key><string>local.spoofmac.doh.cloudflare</string>
+      <key>PayloadUUID</key><string>A866C096-CB37-4FD5-8BD8-6F92127FBCC0</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadDisplayName</key><string>Cloudflare DoH</string>
+      <key>DNSSettings</key>
+      <dict>
+        <key>DNSProtocol</key><string>HTTPS</string>
+        <key>ServerURL</key><string>https://cloudflare-dns.com/dns-query</string>
+        <key>AllowFailover</key><true/>
+      </dict>
+    </dict>
+  </array>
+  <key>PayloadDisplayName</key><string>Cloudflare DoH (public Wi-Fi friendly)</string>
+  <key>PayloadIdentifier</key><string>local.spoofmac.doh</string>
+  <key>PayloadUUID</key><string>A32F5C46-ADE8-443B-9B0A-FA35AE612C3C</string>
+  <key>PayloadType</key><string>Configuration</string>
+  <key>PayloadVersion</key><integer>1</integer>
+  <key>PayloadScope</key><string>System</string>
+  <key>PayloadRemovalDisallowed</key><false/>
+</dict>
+</plist>
